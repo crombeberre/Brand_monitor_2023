@@ -6,7 +6,7 @@ import time
 import plotly.express as px
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
-import os  # <--- NEW IMPORT
+import os
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Brand Monitor 2023", layout="wide")
@@ -26,24 +26,22 @@ def load_data():
         st.error("❌ File 'brand_reputation_2023.json' not found.")
         return pd.DataFrame()
 
-# --- 3. AI ANALYSIS (SECURE MODE) ---
-# REPLACE YOUR OLD FUNCTION WITH THIS DEBUG VERSION
+# --- 3. AI ANALYSIS (UPDATED URL) ---
 def query_sentiment_api(text_list):
-    API_URL = "https://api-inference.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english"
+    # 👇 THIS IS THE FIX: We switched to the new 'router' URL
+    API_URL = "https://router.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english"
+    
     api_token = os.environ.get("HF_TOKEN")
     
-    # DEBUG 1: Tell us if the token was found
     if not api_token:
-        st.error("⚠️ SYSTEM ERROR: Render cannot find the HF_TOKEN. Check your Environment Variables spelling.")
         headers = {}
     else:
-        # st.success("✅ Token detected!") # Uncomment this if you want to be sure
         headers = {"Authorization": f"Bearer {api_token}"}
     
     results = []
     
     if text_list:
-        my_bar = st.progress(0, text="Analyzing...")
+        my_bar = st.progress(0, text="Analyzing with AI...")
 
     for i, text in enumerate(text_list):
         success = False
@@ -57,10 +55,10 @@ def query_sentiment_api(text_list):
                     time.sleep(3)
                     continue
                 
-                # DEBUG 2: If there is a different error, SHOW IT!
+                # Check for other errors (and skip if found)
                 if isinstance(data, dict) and "error" in data:
-                    st.error(f"Hugging Face Error: {data['error']}")
-                
+                    break
+
                 if isinstance(data, list) and len(data) > 0:
                     top_result = data[0][0]
                     results.append(top_result)
@@ -68,9 +66,7 @@ def query_sentiment_api(text_list):
                     break
                 else:
                     break
-            except Exception as e:
-                # DEBUG 3: Show connection errors
-                st.error(f"Connection Error: {e}")
+            except Exception:
                 break
         
         if not success:
@@ -169,6 +165,7 @@ elif page == "Reviews":
                     st.error(f"Could not generate word cloud. Error: {e}")
             else:
                 st.info("Not enough text to generate a word cloud.")
+
 
 
 
