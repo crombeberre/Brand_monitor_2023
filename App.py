@@ -6,6 +6,7 @@ import time
 import plotly.express as px
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
+import os  # <--- NEW IMPORT
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Brand Monitor 2023", layout="wide")
@@ -25,17 +26,21 @@ def load_data():
         st.error("❌ File 'brand_reputation_2023.json' not found.")
         return pd.DataFrame()
 
-# --- 3. AI ANALYSIS (WITH TOKEN AUTHENTICATION) ---
+# --- 3. AI ANALYSIS (SECURE MODE) ---
 def query_sentiment_api(text_list):
     API_URL = "https://api-inference.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english"
     
-    # ---------------------------------------------------------
-    # 👇 PASTE YOUR HUGGING FACE TOKEN BELOW 👇
-    # It should look like: "hf_AbCdEfGhIjKlMnOpQrStUvWxYz"
-    API_TOKEN = "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" 
-    # ---------------------------------------------------------
+    # --- SECURE TOKEN RETRIEVAL ---
+    # This grabs the token from Render's "Environment" tab
+    api_token = os.environ.get("HF_TOKEN")
     
-    headers = {"Authorization": f"Bearer {API_TOKEN}"}
+    # Fallback just in case (optional, but good for debugging)
+    if not api_token:
+        # If running locally without env var, you might see this warning
+        st.warning("⚠️ No HF_TOKEN found. AI might be slow/neutral.")
+        headers = {}
+    else:
+        headers = {"Authorization": f"Bearer {api_token}"}
     
     results = []
     
@@ -43,20 +48,16 @@ def query_sentiment_api(text_list):
         my_bar = st.progress(0, text="Analyzing with AI...")
 
     for i, text in enumerate(text_list):
-        # RETRY LOGIC: Try up to 5 times if the model is "loading"
         success = False
         for attempt in range(5):
             try:
-                # We added 'headers=headers' here to fix the Neutral bug
                 response = requests.post(API_URL, headers=headers, json={"inputs": text})
                 data = response.json()
                 
-                # Check for "Model is loading" error
                 if isinstance(data, dict) and "loading" in data.get("error", "").lower():
-                    time.sleep(3) # Wait for AI to wake up
+                    time.sleep(3)
                     continue
                 
-                # If we get a valid list, we are good!
                 if isinstance(data, list) and len(data) > 0:
                     top_result = data[0][0]
                     results.append(top_result)
@@ -67,11 +68,9 @@ def query_sentiment_api(text_list):
             except Exception:
                 break
         
-        # If all 5 attempts failed, fallback to Neutral
         if not success:
             results.append({'label': 'NEUTRAL', 'score': 0.5})
             
-        # Update progress bar
         if text_list:
             my_bar.progress((i + 1) / len(text_list))
             
@@ -122,10 +121,8 @@ elif page == "Reviews":
         if reviews_month.empty:
             st.warning(f"No reviews found for {selected_month_name} 2023.")
         else:
-            # Analyze a few reviews (limit to 10 for speed)
             reviews_to_analyze = reviews_month.head(10)
             
-            # Run AI
             texts = reviews_to_analyze['text'].fillna('').astype(str).tolist()
             predictions = query_sentiment_api(texts)
             
@@ -151,7 +148,6 @@ elif page == "Reviews":
                              color_discrete_map={'POSITIVE': 'green', 'NEGATIVE': 'red', 'NEUTRAL': 'gray'})
                 st.plotly_chart(fig, use_container_width=True)
 
-            # --- WORD CLOUD SECTION ---
             st.divider()
             st.subheader(f"☁️ Word Cloud for {selected_month_name}")
             
@@ -168,6 +164,7 @@ elif page == "Reviews":
                     st.error(f"Could not generate word cloud. Error: {e}")
             else:
                 st.info("Not enough text to generate a word cloud.")
+
 
 
 
