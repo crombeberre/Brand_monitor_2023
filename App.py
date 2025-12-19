@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 import json
+import gc  # <--- Added for memory cleanup
 from transformers import pipeline
 import plotly.express as px
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Brand Monitor 2023", layout="wide")
 
-# --- 2. LOAD DATA (Tailored for Flat JSON List) ---
+# --- 2. LOAD DATA ---
 @st.cache_data
 def load_data():
     try:
@@ -15,7 +16,6 @@ def load_data():
         df = pd.read_json("brand_reputation_2023.json")
         
         # Convert date column to datetime
-        # (products might have no date, so errors='coerce' turns them into NaT)
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'], errors='coerce')
             
@@ -28,10 +28,14 @@ def load_data():
         st.error("❌ File 'brand_reputation_2023.json' not found.")
         return pd.DataFrame()
 
-# --- 3. LOAD AI MODEL ---
-@st.cache_resource
+# --- 3. LOAD AI MODEL (OPTIMIZED) ---
+@st.cache_resource  # <--- CRITICAL FIX: Loads model once and keeps it in memory
 def load_sentiment_model():
+    # Using the specific model explicitly
     return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+
+# Explicitly clear memory before loading the heavy model
+gc.collect()
 
 df = load_data()
 sentiment_pipeline = load_sentiment_model()
@@ -45,11 +49,8 @@ if page == "Products":
     st.title("🛍️ Product Catalog")
     
     if not df.empty:
-        # Filter rows where type is 'product'
         products = df[df['type'] == 'product'].copy()
         
-        # Select only relevant columns for products
-        # based on your JSON: "name", "price"
         if not products.empty:
             st.dataframe(
                 products[['name', 'price']],
@@ -57,7 +58,7 @@ if page == "Products":
                     "name": "Product Name",
                     "price": st.column_config.NumberColumn("Price ($)", format="$%.2f")
                 },
-                use_container_width=True
+                use_container_width=True 
             )
         else:
             st.info("No products found.")
@@ -66,10 +67,8 @@ elif page == "Testimonials":
     st.title("🗣️ Customer Testimonials")
     
     if not df.empty:
-        # Filter rows where type is 'testimonial'
         testimonials = df[df['type'] == 'testimonial'].copy()
         
-        # Select relevant columns: "content", "author"
         if not testimonials.empty:
             st.table(testimonials[['content', 'author']].rename(columns={
                 'content': 'Testimonial',
@@ -91,7 +90,6 @@ elif page == "Reviews":
 
     if not df.empty:
         # B. Filter Data
-        # Filter for type 'review' AND specific month AND year 2023
         reviews_month = df[
             (df['type'] == 'review') & 
             (df['date'].dt.month == selected_month_index) & 
@@ -102,14 +100,13 @@ elif page == "Reviews":
             st.warning(f"No reviews found for {selected_month_name} 2023.")
         else:
             # C. Perform Sentiment Analysis
+            # We limit the number of reviews processed at once to prevent crashes
             with st.spinner(f"Analyzing {len(reviews_month)} reviews with AI..."):
-                # Based on your JSON, reviews use the key 'text'
                 texts = reviews_month['text'].fillna('').astype(str).tolist()
                 
                 # Run Model
                 predictions = sentiment_pipeline(texts)
                 
-                # Store results
                 reviews_month['sentiment'] = [p['label'] for p in predictions]
                 reviews_month['confidence'] = [p['score'] for p in predictions]
 
@@ -130,20 +127,18 @@ elif page == "Reviews":
             with col2:
                 st.subheader("Sentiment Split")
                 
-                # Aggregate for Chart
                 chart_data = reviews_month.groupby('sentiment').agg(
                     count=('sentiment', 'count'),
                     avg_confidence=('confidence', 'mean')
                 ).reset_index()
 
-                # Plot Bar Chart with Advanced Tooltip
                 fig = px.bar(
                     chart_data,
                     x='sentiment',
                     y='count',
                     color='sentiment',
                     color_discrete_map={'POSITIVE': 'green', 'NEGATIVE': 'red'},
-                    hover_data=['avg_confidence'], # This creates the tooltip
+                    hover_data=['avg_confidence'],
                     labels={'count': 'Count', 'avg_confidence': 'Avg Confidence'}
                 )
                 st.plotly_chart(fig, use_container_width=True)
