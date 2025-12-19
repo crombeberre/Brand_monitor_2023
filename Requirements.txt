@@ -1,7 +1,9 @@
-requests
-beautifulsoup4
-pandas
 streamlit
+pandas
+plotly
 transformers
 torch
-plotly
+requests
+wordcloud
+matplotlib
+
