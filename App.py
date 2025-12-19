@@ -27,25 +27,23 @@ def load_data():
         return pd.DataFrame()
 
 # --- 3. AI ANALYSIS (SECURE MODE) ---
+# REPLACE YOUR OLD FUNCTION WITH THIS DEBUG VERSION
 def query_sentiment_api(text_list):
     API_URL = "https://api-inference.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english"
-    
-    # --- SECURE TOKEN RETRIEVAL ---
-    # This grabs the token from Render's "Environment" tab
     api_token = os.environ.get("HF_TOKEN")
     
-    # Fallback just in case (optional, but good for debugging)
+    # DEBUG 1: Tell us if the token was found
     if not api_token:
-        # If running locally without env var, you might see this warning
-        st.warning("⚠️ No HF_TOKEN found. AI might be slow/neutral.")
+        st.error("⚠️ SYSTEM ERROR: Render cannot find the HF_TOKEN. Check your Environment Variables spelling.")
         headers = {}
     else:
+        # st.success("✅ Token detected!") # Uncomment this if you want to be sure
         headers = {"Authorization": f"Bearer {api_token}"}
     
     results = []
     
     if text_list:
-        my_bar = st.progress(0, text="Analyzing with AI...")
+        my_bar = st.progress(0, text="Analyzing...")
 
     for i, text in enumerate(text_list):
         success = False
@@ -54,9 +52,14 @@ def query_sentiment_api(text_list):
                 response = requests.post(API_URL, headers=headers, json={"inputs": text})
                 data = response.json()
                 
+                # Check for loading
                 if isinstance(data, dict) and "loading" in data.get("error", "").lower():
                     time.sleep(3)
                     continue
+                
+                # DEBUG 2: If there is a different error, SHOW IT!
+                if isinstance(data, dict) and "error" in data:
+                    st.error(f"Hugging Face Error: {data['error']}")
                 
                 if isinstance(data, list) and len(data) > 0:
                     top_result = data[0][0]
@@ -65,7 +68,9 @@ def query_sentiment_api(text_list):
                     break
                 else:
                     break
-            except Exception:
+            except Exception as e:
+                # DEBUG 3: Show connection errors
+                st.error(f"Connection Error: {e}")
                 break
         
         if not success:
@@ -164,6 +169,7 @@ elif page == "Reviews":
                     st.error(f"Could not generate word cloud. Error: {e}")
             else:
                 st.info("Not enough text to generate a word cloud.")
+
 
 
 
