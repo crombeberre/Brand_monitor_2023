@@ -27,10 +27,9 @@ def load_data():
         st.error("❌ File 'brand_reputation_2023.json' not found.")
         return pd.DataFrame()
 
-# --- 3. LOGIC: SMART FALLBACK (Mimics the AI) ---
+# --- 3. LOGIC: SMART FALLBACK (High Accuracy Manual Mode) ---
 def get_high_accuracy_sentiment(text):
-    # This dictionary is tuned to match the Deep Learning model's logic
-    # It ensures words like "epic" are correctly identified as Positive.
+    # This dictionary ensures the app is smart even without the AI server
     lexicon = {
         # STRONG POSITIVE
         'epic': 2, 'amazing': 2, 'excellent': 2, 'best': 2, 'love': 2, 
@@ -67,9 +66,9 @@ def get_high_accuracy_sentiment(text):
     else:
         return 'NEUTRAL', 0.50
 
-# --- 4. MAIN AI FUNCTION (Restored to Original Logic) ---
+# --- 4. MAIN AI FUNCTION ---
 def query_sentiment_api(text_list):
-    # This is the NEW URL for the "Perfect" Model you liked
+    # Using the new, working Router URL
     API_URL = "https://router.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english"
     api_token = os.environ.get("HF_TOKEN")
     
@@ -83,7 +82,7 @@ def query_sentiment_api(text_list):
     for i, text in enumerate(text_list):
         success = False
         
-        # --- PRIORITY 1: THE DEEP LEARNING MODEL (The "Perfect" one) ---
+        # --- PRIORITY 1: THE DEEP LEARNING MODEL ---
         for attempt in range(2): 
             try:
                 response = requests.post(API_URL, headers=headers, json={"inputs": text}, timeout=3)
@@ -94,7 +93,7 @@ def query_sentiment_api(text_list):
                     time.sleep(1)
                     continue
                 
-                # If we get a result, USE IT.
+                # If we get a valid result, USE IT.
                 if isinstance(data, list) and len(data) > 0:
                     top_result = data[0][0]
                     results.append(top_result)
@@ -103,7 +102,7 @@ def query_sentiment_api(text_list):
             except Exception:
                 break
         
-        # --- PRIORITY 2: THE SMART BACKUP (Only if API fails) ---
+        # --- PRIORITY 2: THE SMART BACKUP (If API fails) ---
         if not success:
             label, score = get_high_accuracy_sentiment(text)
             results.append({'label': label, 'score': score})
@@ -127,7 +126,8 @@ if page == "Products":
     if not df.empty:
         products = df[df['type'] == 'product'].copy()
         if not products.empty:
-            st.dataframe(products[['name', 'price']], width=None)
+            # FIX 1: UPDATED HERE
+            st.dataframe(products[['name', 'price']], use_container_width=True)
         else:
             st.info("No products found.")
 
@@ -170,12 +170,13 @@ elif page == "Reviews":
 
             with col1:
                 st.subheader("Review Data")
+                # FIX 2: UPDATED HERE
                 st.dataframe(
                     reviews_to_analyze[['date', 'text', 'sentiment', 'confidence']],
                     column_config={
                         "confidence": st.column_config.NumberColumn("Conf.", format="%.2f")
                     },
-                    width=None
+                    use_container_width=True
                 )
 
             with col2:
@@ -201,6 +202,7 @@ elif page == "Reviews":
                     st.error(f"Could not generate word cloud. Error: {e}")
             else:
                 st.info("Not enough text to generate a word cloud.")
+
 
 
 
