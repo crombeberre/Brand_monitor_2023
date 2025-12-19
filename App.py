@@ -25,27 +25,35 @@ def load_data():
         st.error("❌ File 'brand_reputation_2023.json' not found.")
         return pd.DataFrame()
 
-# --- 3. AI ANALYSIS (ROBUST API MODE) ---
+# --- 3. AI ANALYSIS (WITH TOKEN AUTHENTICATION) ---
 def query_sentiment_api(text_list):
     API_URL = "https://api-inference.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english"
+    
+    # ---------------------------------------------------------
+    # 👇 PASTE YOUR HUGGING FACE TOKEN BELOW 👇
+    # It should look like: "hf_AbCdEfGhIjKlMnOpQrStUvWxYz"
+    API_TOKEN = "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" 
+    # ---------------------------------------------------------
+    
+    headers = {"Authorization": f"Bearer {API_TOKEN}"}
     
     results = []
     
     if text_list:
-        my_bar = st.progress(0, text="Waking up AI model (this might take a moment)...")
+        my_bar = st.progress(0, text="Analyzing with AI...")
 
     for i, text in enumerate(text_list):
         # RETRY LOGIC: Try up to 5 times if the model is "loading"
         success = False
         for attempt in range(5):
             try:
-                response = requests.post(API_URL, json={"inputs": text})
+                # We added 'headers=headers' here to fix the Neutral bug
+                response = requests.post(API_URL, headers=headers, json={"inputs": text})
                 data = response.json()
                 
                 # Check for "Model is loading" error
                 if isinstance(data, dict) and "loading" in data.get("error", "").lower():
-                    # Wait and try again
-                    time.sleep(3)
+                    time.sleep(3) # Wait for AI to wake up
                     continue
                 
                 # If we get a valid list, we are good!
@@ -55,7 +63,6 @@ def query_sentiment_api(text_list):
                     success = True
                     break
                 else:
-                    # Weird response, stop retrying
                     break
             except Exception:
                 break
@@ -161,6 +168,7 @@ elif page == "Reviews":
                     st.error(f"Could not generate word cloud. Error: {e}")
             else:
                 st.info("Not enough text to generate a word cloud.")
+
 
 
 
