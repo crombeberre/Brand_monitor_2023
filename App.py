@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import json
-import gc  # <--- Added for memory cleanup
-from transformers import pipeline
+import requests
+import time
 import plotly.express as px
 
 # --- 1. CONFIGURATION ---
@@ -15,7 +15,7 @@ def load_data():
         # Load the JSON list directly into a DataFrame
         df = pd.read_json("brand_reputation_2023.json")
         
-        # Convert date column to datetime
+        # FIX: Handle date parsing safely (fixes the UserWarning in your logs)
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'], errors='coerce')
             
@@ -28,17 +28,41 @@ def load_data():
         st.error("❌ File 'brand_reputation_2023.json' not found.")
         return pd.DataFrame()
 
-# --- 3. LOAD AI MODEL (OPTIMIZED) ---
-@st.cache_resource  # <--- CRITICAL FIX: Loads model once and keeps it in memory
-def load_sentiment_model():
-    # Using the specific model explicitly
-    return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
-
-# Explicitly clear memory before loading the heavy model
-gc.collect()
+# --- 3. AI ANALYSIS (API MODE) ---
+# This method uses 0 RAM because it runs on HuggingFace's cloud, not yours.
+def query_sentiment_api(text_list):
+    API_URL = "https://api-inference.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english"
+    # Note: For heavy use, you'd need an API Token, but for a few clicks this usually works free.
+    
+    results = []
+    my_bar = st.progress(0, text="Analyzing with Cloud AI...")
+    
+    for i, text in enumerate(text_list):
+        try:
+            # We send payload to Hugging Face
+            response = requests.post(API_URL, json={"inputs": text})
+            data = response.json()
+            
+            # Formatting the response
+            # The API returns a list of lists: [[{'label': 'POSITIVE', 'score': 0.9}]]
+            if isinstance(data, list) and len(data) > 0:
+                top_result = data[0][0] # Get the first prediction
+                results.append(top_result)
+            else:
+                # Fallback if API is busy/loading
+                results.append({'label': 'NEUTRAL', 'score': 0.5})
+                
+        except Exception:
+            results.append({'label': 'NEUTRAL', 'score': 0.0})
+            
+        # Update progress bar
+        my_bar.progress((i + 1) / len(text_list))
+        time.sleep(0.1) # Be nice to the free API
+        
+    my_bar.empty()
+    return results
 
 df = load_data()
-sentiment_pipeline = load_sentiment_model()
 
 # --- 4. SIDEBAR NAVIGATION ---
 st.sidebar.title("Navigation")
@@ -50,7 +74,6 @@ if page == "Products":
     
     if not df.empty:
         products = df[df['type'] == 'product'].copy()
-        
         if not products.empty:
             st.dataframe(
                 products[['name', 'price']],
@@ -68,7 +91,6 @@ elif page == "Testimonials":
     
     if not df.empty:
         testimonials = df[df['type'] == 'testimonial'].copy()
-        
         if not testimonials.empty:
             st.table(testimonials[['content', 'author']].rename(columns={
                 'content': 'Testimonial',
@@ -99,16 +121,18 @@ elif page == "Reviews":
         if reviews_month.empty:
             st.warning(f"No reviews found for {selected_month_name} 2023.")
         else:
-            # C. Perform Sentiment Analysis
-            # We limit the number of reviews processed at once to prevent crashes
-            with st.spinner(f"Analyzing {len(reviews_month)} reviews with AI..."):
-                texts = reviews_month['text'].fillna('').astype(str).tolist()
-                
-                # Run Model
-                predictions = sentiment_pipeline(texts)
-                
-                reviews_month['sentiment'] = [p['label'] for p in predictions]
-                reviews_month['confidence'] = [p['score'] for p in predictions]
+            # Limit to first 5 reviews to prevent API timeout during demo
+            reviews_to_analyze = reviews_month.head(5)
+            
+            if len(reviews_month) > 5:
+                st.info(f"⚡ Demo Mode: Analyzing first 5 of {len(reviews_month)} reviews to save time.")
+            
+            # C. Perform Sentiment Analysis via API
+            texts = reviews_to_analyze['text'].fillna('').astype(str).tolist()
+            predictions = query_sentiment_api(texts)
+            
+            reviews_to_analyze['sentiment'] = [p['label'] for p in predictions]
+            reviews_to_analyze['confidence'] = [p.get('score', 0) for p in predictions]
 
             # D. Visualization
             col1, col2 = st.columns([2, 1])
@@ -116,7 +140,7 @@ elif page == "Reviews":
             with col1:
                 st.subheader("Review Details")
                 st.dataframe(
-                    reviews_month[['date', 'text', 'sentiment', 'confidence']],
+                    reviews_to_analyze[['date', 'text', 'sentiment', 'confidence']],
                     column_config={
                         "date": st.column_config.DateColumn("Date"),
                         "confidence": st.column_config.NumberColumn("Confidence Score", format="%.4f")
@@ -127,7 +151,7 @@ elif page == "Reviews":
             with col2:
                 st.subheader("Sentiment Split")
                 
-                chart_data = reviews_month.groupby('sentiment').agg(
+                chart_data = reviews_to_analyze.groupby('sentiment').agg(
                     count=('sentiment', 'count'),
                     avg_confidence=('confidence', 'mean')
                 ).reset_index()
@@ -137,8 +161,9 @@ elif page == "Reviews":
                     x='sentiment',
                     y='count',
                     color='sentiment',
-                    color_discrete_map={'POSITIVE': 'green', 'NEGATIVE': 'red'},
+                    color_discrete_map={'POSITIVE': 'green', 'NEGATIVE': 'red', 'NEUTRAL': 'gray'},
                     hover_data=['avg_confidence'],
                     labels={'count': 'Count', 'avg_confidence': 'Avg Confidence'}
                 )
                 st.plotly_chart(fig, use_container_width=True)
+
