@@ -7,6 +7,7 @@ import plotly.express as px
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 import os
+import re # Standard Python regex tool (no install needed)
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Brand Monitor 2023", layout="wide")
@@ -26,16 +27,45 @@ def load_data():
         st.error("❌ File 'brand_reputation_2023.json' not found.")
         return pd.DataFrame()
 
-# --- 3. AI ANALYSIS (WITH SAFETY NET) ---
+# --- 3. HELPER: PURE PYTHON SENTIMENT (No NLTK) ---
+def get_fallback_sentiment(text):
+    # A manual lexicon of words and their "emotional weight"
+    # This acts like a mini-VADER without needing to install anything.
+    lexicon = {
+        # POSITIVE WORDS
+        'good': 1, 'great': 2, 'excellent': 2, 'amazing': 2, 'love': 2, 'best': 2,
+        'nice': 1, 'fast': 1, 'tasty': 2, 'yummy': 2, 'worth': 2, 'easy': 1,
+        'comfortable': 2, 'epic': 2, 'cool': 1, 'happy': 1, 'fun': 1, 'recommend': 2,
+        'perfect': 2, 'useful': 1, 'adorable': 2, 'warm': 1, 'durable': 2,
+        # NEGATIVE WORDS
+        'bad': -1, 'terrible': -2, 'awful': -2, 'worst': -2, 'hate': -2,
+        'slow': -1, 'broken': -2, 'expensive': -1, 'cheap': -1, 'hard': -1,
+        'poor': -2, 'disappointed': -2, 'sad': -1, 'boring': -1, 'ugly': -1,
+        'small': -1, 'tight': -1, 'leak': -2, 'cold': -1
+    }
+    
+    # Clean text: lowercase and remove punctuation
+    words = re.findall(r'\w+', text.lower())
+    
+    score = 0
+    for word in words:
+        if word in lexicon:
+            score += lexicon[word]
+            
+    # Normalize score to label
+    if score > 0:
+        return 'POSITIVE', min(0.6 + (score * 0.1), 0.99) # Cap at 0.99
+    elif score < 0:
+        return 'NEGATIVE', min(0.6 + (abs(score) * 0.1), 0.99)
+    else:
+        return 'NEUTRAL', 0.5
+
+# --- 4. HYBRID AI ANALYSIS ---
 def query_sentiment_api(text_list):
-    # Try the new router URL first
     API_URL = "https://router.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english"
     api_token = os.environ.get("HF_TOKEN")
     
-    if api_token:
-        headers = {"Authorization": f"Bearer {api_token}"}
-    else:
-        headers = {}
+    headers = {"Authorization": f"Bearer {api_token}"} if api_token else {}
     
     results = []
     
@@ -44,18 +74,17 @@ def query_sentiment_api(text_list):
 
     for i, text in enumerate(text_list):
         success = False
-        # 1. Try the AI API
-        for attempt in range(3): # Reduced retries to speed it up
+        
+        # OPTION A: CLOUD AI (Try this first)
+        for attempt in range(2): 
             try:
-                response = requests.post(API_URL, headers=headers, json={"inputs": text})
+                response = requests.post(API_URL, headers=headers, json={"inputs": text}, timeout=3)
                 data = response.json()
                 
-                # Check loading
                 if isinstance(data, dict) and "loading" in data.get("error", "").lower():
-                    time.sleep(2)
+                    time.sleep(1)
                     continue
                 
-                # Check success
                 if isinstance(data, list) and len(data) > 0:
                     top_result = data[0][0]
                     results.append(top_result)
@@ -64,16 +93,10 @@ def query_sentiment_api(text_list):
             except Exception:
                 break
         
-        # 2. THE SAFETY NET (If AI fails, use backup logic)
+        # OPTION B: CUSTOM FALLBACK (Pure Python)
         if not success:
-            # Simple fallback: If it has good words, call it Positive.
-            positive_words = ['good', 'great', 'love', 'excellent', 'amazing', 'best', 'fast', 'nice']
-            is_positive = any(word in text.lower() for word in positive_words)
-            
-            if is_positive:
-                results.append({'label': 'POSITIVE', 'score': 0.95})
-            else:
-                results.append({'label': 'NEGATIVE', 'score': 0.95})
+            label, score = get_fallback_sentiment(text)
+            results.append({'label': label, 'score': score})
             
         if text_list:
             my_bar.progress((i + 1) / len(text_list))
@@ -84,17 +107,17 @@ def query_sentiment_api(text_list):
 
 df = load_data()
 
-# --- 4. SIDEBAR NAVIGATION ---
+# --- 5. SIDEBAR NAVIGATION ---
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Products", "Testimonials", "Reviews"])
 
-# --- 5. MAIN PAGE LOGIC ---
+# --- 6. MAIN PAGE LOGIC ---
 if page == "Products":
     st.title("🛍️ Product Catalog")
     if not df.empty:
         products = df[df['type'] == 'product'].copy()
         if not products.empty:
-            st.dataframe(products[['name', 'price']], use_container_width=True)
+            st.dataframe(products[['name', 'price']], width=None)
         else:
             st.info("No products found.")
 
@@ -125,13 +148,13 @@ elif page == "Reviews":
         if reviews_month.empty:
             st.warning(f"No reviews found for {selected_month_name} 2023.")
         else:
-            reviews_to_analyze = reviews_month.head(10)
+            reviews_to_analyze = reviews_month.head(10).copy()
             
             texts = reviews_to_analyze['text'].fillna('').astype(str).tolist()
             predictions = query_sentiment_api(texts)
             
-            reviews_to_analyze['sentiment'] = [p['label'] for p in predictions]
-            reviews_to_analyze['confidence'] = [p.get('score', 0) for p in predictions]
+            reviews_to_analyze.loc[:, 'sentiment'] = [p['label'] for p in predictions]
+            reviews_to_analyze.loc[:, 'confidence'] = [p.get('score', 0) for p in predictions]
 
             col1, col2 = st.columns([2, 1])
 
@@ -142,7 +165,7 @@ elif page == "Reviews":
                     column_config={
                         "confidence": st.column_config.NumberColumn("Conf.", format="%.2f")
                     },
-                    use_container_width=True
+                    width=None
                 )
 
             with col2:
@@ -168,6 +191,7 @@ elif page == "Reviews":
                     st.error(f"Could not generate word cloud. Error: {e}")
             else:
                 st.info("Not enough text to generate a word cloud.")
+
 
 
 
