@@ -6,6 +6,7 @@ torch
 requests
 wordcloud
 matplotlib
-huggingface_hub
+huggingface_hub>=0.23.0
+
 
 
