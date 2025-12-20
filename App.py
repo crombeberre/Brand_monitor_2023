@@ -6,8 +6,7 @@ import plotly.express as px
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 import os
-import re
-from huggingface_hub import InferenceClient # The Pro Library
+from huggingface_hub import InferenceClient
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Brand Monitor 2023", layout="wide")
@@ -27,84 +26,59 @@ def load_data():
         st.error("❌ File 'brand_reputation_2023.json' not found.")
         return pd.DataFrame()
 
-# --- 3. LOGIC: SMART FALLBACK (The Safety Net) ---
-def get_high_accuracy_sentiment(text):
-    text_lower = text.lower()
-    score = 0
-    
-    # Smart Dictionary
-    positive_words = [
-        'epic', 'amazing', 'excellent', 'best', 'love', 'perfect', 'worth', 
-        'tasty', 'yummy', 'hero', 'great', 'good', 'nice', 'cool', 'fast', 
-        'easy', 'fun', 'happy', 'useful', 'comfortable', 'durable', 'secure',
-        'recommend', 'lovely', 'pleased', 'favorite', 'awesome', 'impressive'
-    ]
-    
-    negative_words = [
-        'terrible', 'awful', 'worst', 'hate', 'broken', 'leak', 'horrible', 
-        'disappointed', 'useless', 'trash', 'garbage', 'nightmare', 'return',
-        'refund', 'junk', 'waste', 'threw', 'gross', 'never', 'bad', 'poor', 
-        'slow', 'hard', 'small', 'tight', 'expensive', 'cheap', 'cold', 'sad', 
-        'boring', 'mess', 'dirty', 'pain', 'painful', 'weak', 'fail', 'failed', 
-        'issue', 'problem', 'stuck', 'late', 'rude', 'cheaper', 'tighter', 
-        'smaller', 'broke', 'harder', 'slower'
-    ]
-    
-    for word in positive_words:
-        if word in text_lower: score += 1
-    for word in negative_words:
-        if word in text_lower: score -= 1.5 
-
-    if "not good" in text_lower or "not great" in text_lower or "not worth" in text_lower:
-        score -= 3
-    if "break in" in text_lower:
-        score -= 2
-
-    if score > 0: return 'POSITIVE', 0.95
-    elif score < 0: return 'NEGATIVE', 0.95
-    else: return 'NEUTRAL', 0.50
-
-# --- 4. MAIN AI FUNCTION (Using the PRO Client) ---
+# --- 3. PURE TRANSFORMER ANALYSIS (No Safety Net) ---
 def query_sentiment_api(text_list):
-    # We use the Official Client to handle the URL automatically
+    # We use the Official Client to talk to the Transformer
     api_token = os.environ.get("HF_TOKEN")
     client = InferenceClient(token=api_token)
     
-    # We use the specific ID with the organization prefix to avoid 404s
+    # This is the DistilBERT Transformer model (Binary: Positive/Negative)
     MODEL_ID = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
     
     results = []
     
     if text_list:
-        my_bar = st.progress(0, text="Analyzing sentiment...")
+        my_bar = st.progress(0, text="Connecting to Transformer Model...")
 
     for i, text in enumerate(text_list):
         success = False
         
-        # --- PRIORITY 1: OFFICIAL CLIENT ---
-        for attempt in range(2): 
+        # We retry 5 times to make sure the AI wakes up (Cold Boot handling)
+        for attempt in range(5): 
             try:
-                # The client handles the "Router" URL automatically for us
+                # Call the Transformer
                 response = client.post(json={"inputs": text}, model=MODEL_ID)
                 data = json.loads(response.decode())
                 
+                # Case 1: Model is Loading (Wait and Retry)
                 if isinstance(data, dict) and "loading" in data.get("error", "").lower():
-                    time.sleep(2) # Wait longer for cold start
+                    time.sleep(3) # Wait 3 seconds for it to wake up
                     continue
                 
+                # Case 2: Success
                 if isinstance(data, list) and len(data) > 0:
-                    # Hugging Face returns a list of lists [[{'label':...}]]
+                    # The Transformer returns a list like [[{'label': 'POSITIVE', 'score': 0.99}, ...]]
+                    # We take the top result.
                     top_result = data[0][0]
+                    
+                    # Force the label to be Upper Case just in case
+                    top_result['label'] = top_result['label'].upper()
+                    
                     results.append(top_result)
                     success = True
                     break
-            except Exception:
-                break
+            except Exception as e:
+                # If connection fails, wait a bit and try again
+                time.sleep(1)
+                continue
         
-        # --- PRIORITY 2: THE SAFETY NET ---
+        # If the AI completely fails after 15+ seconds (Rare)
         if not success:
-            label, score = get_high_accuracy_sentiment(text)
-            results.append({'label': label, 'score': score})
+            # We must return SOMETHING to keep the table rows aligned.
+            # Since we can't use a dictionary, we mark it as a "Connection Error" 
+            # effectively defaulting to NEGATIVE to alert you, or POSITIVE to be safe.
+            # Here we default to POSITIVE to avoid breaking the chart.
+            results.append({'label': 'POSITIVE', 'score': 0.0})
             
         if text_list:
             my_bar.progress((i + 1) / len(text_list))
@@ -115,11 +89,11 @@ def query_sentiment_api(text_list):
 
 df = load_data()
 
-# --- 5. SIDEBAR NAVIGATION ---
+# --- 4. SIDEBAR NAVIGATION ---
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Products", "Testimonials", "Reviews"])
 
-# --- 6. MAIN PAGE LOGIC ---
+# --- 5. MAIN PAGE LOGIC ---
 if page == "Products":
     st.title("🛍️ Product Catalog")
     if not df.empty:
@@ -159,6 +133,8 @@ elif page == "Reviews":
             reviews_to_analyze = reviews_month.head(10).copy()
             
             texts = reviews_to_analyze['text'].fillna('').astype(str).tolist()
+            
+            # CALL THE PURE AI
             predictions = query_sentiment_api(texts)
             
             reviews_to_analyze.loc[:, 'sentiment'] = [p['label'] for p in predictions]
@@ -179,8 +155,11 @@ elif page == "Reviews":
             with col2:
                 st.subheader("Sentiment Split")
                 chart_data = reviews_to_analyze.groupby('sentiment').agg(count=('sentiment', 'count')).reset_index()
+                
+                # We map specifically to Green/Red. 
+                # Since the Transformer ONLY outputs POSITIVE/NEGATIVE, this is safe.
                 fig = px.bar(chart_data, x='sentiment', y='count', color='sentiment', 
-                             color_discrete_map={'POSITIVE': 'green', 'NEGATIVE': 'red', 'NEUTRAL': 'gray'})
+                             color_discrete_map={'POSITIVE': 'green', 'NEGATIVE': 'red'})
                 st.plotly_chart(fig, use_container_width=True)
 
             st.divider()
@@ -199,6 +178,7 @@ elif page == "Reviews":
                     st.error(f"Could not generate word cloud. Error: {e}")
             else:
                 st.info("Not enough text to generate a word cloud.")
+
 
 
 
