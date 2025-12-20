@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import json
 import time
 import plotly.express as px
 import matplotlib.pyplot as plt
@@ -26,59 +25,65 @@ def load_data():
         st.error("❌ File 'brand_reputation_2023.json' not found.")
         return pd.DataFrame()
 
-# --- 3. PURE TRANSFORMER ANALYSIS (No Safety Net) ---
+# --- 3. PURE AI ANALYSIS (Official Client) ---
 def query_sentiment_api(text_list):
-    # We use the Official Client to talk to the Transformer
+    # Retrieve the Token
     api_token = os.environ.get("HF_TOKEN")
+    
+    if not api_token:
+        st.error("⚠️ HF_TOKEN is missing in Render Environment Variables!")
+        return []
+
+    # Initialize the Official Client
     client = InferenceClient(token=api_token)
     
-    # This is the DistilBERT Transformer model (Binary: Positive/Negative)
+    # We use the standard model ID. The client handles the URL routing automatically.
     MODEL_ID = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
     
     results = []
     
     if text_list:
-        my_bar = st.progress(0, text="Connecting to Transformer Model...")
+        my_bar = st.progress(0, text="Connecting to Hugging Face AI...")
 
     for i, text in enumerate(text_list):
         success = False
         
-        # We retry 5 times to make sure the AI wakes up (Cold Boot handling)
+        # Retry logic for "Model Loading" (Cold Boot)
         for attempt in range(5): 
             try:
-                # Call the Transformer
-                response = client.post(json={"inputs": text}, model=MODEL_ID)
-                data = json.loads(response.decode())
+                # Use the built-in helper function for classification
+                # This returns a list of scores: [{'label': 'POSITIVE', 'score': 0.99}, ...]
+                response = client.text_classification(text, model=MODEL_ID)
                 
-                # Case 1: Model is Loading (Wait and Retry)
-                if isinstance(data, dict) and "loading" in data.get("error", "").lower():
-                    time.sleep(3) # Wait 3 seconds for it to wake up
+                if not response:
                     continue
+
+                # Get the top label (highest score)
+                top_result = response[0]
                 
-                # Case 2: Success
-                if isinstance(data, list) and len(data) > 0:
-                    # The Transformer returns a list like [[{'label': 'POSITIVE', 'score': 0.99}, ...]]
-                    # We take the top result.
-                    top_result = data[0][0]
-                    
-                    # Force the label to be Upper Case just in case
-                    top_result['label'] = top_result['label'].upper()
-                    
-                    results.append(top_result)
-                    success = True
-                    break
+                # Standardize Label
+                label = top_result.label.upper()
+                score = top_result.score
+                
+                results.append({'label': label, 'score': score})
+                success = True
+                break
+                
             except Exception as e:
-                # If connection fails, wait a bit and try again
-                time.sleep(1)
-                continue
+                # If the error is just "Model is loading", we wait.
+                error_str = str(e).lower()
+                if "loading" in error_str or "503" in error_str:
+                    time.sleep(3)
+                    continue
+                else:
+                    # If it's a REAL error (Authentication, 404), we print it on screen.
+                    # st.warning(f"API Error on item {i}: {e}") # Uncomment to debug
+                    time.sleep(1)
+                    continue
         
-        # If the AI completely fails after 15+ seconds (Rare)
+        # If AI fails after 5 attempts, we DO NOT fake it. We show "ERROR".
         if not success:
-            # We must return SOMETHING to keep the table rows aligned.
-            # Since we can't use a dictionary, we mark it as a "Connection Error" 
-            # effectively defaulting to NEGATIVE to alert you, or POSITIVE to be safe.
-            # Here we default to POSITIVE to avoid breaking the chart.
-            results.append({'label': 'POSITIVE', 'score': 0.0})
+            results.append({'label': 'ERROR', 'score': 0.00})
             
         if text_list:
             my_bar.progress((i + 1) / len(text_list))
@@ -134,7 +139,7 @@ elif page == "Reviews":
             
             texts = reviews_to_analyze['text'].fillna('').astype(str).tolist()
             
-            # CALL THE PURE AI
+            # CALL THE REAL AI
             predictions = query_sentiment_api(texts)
             
             reviews_to_analyze.loc[:, 'sentiment'] = [p['label'] for p in predictions]
@@ -156,10 +161,9 @@ elif page == "Reviews":
                 st.subheader("Sentiment Split")
                 chart_data = reviews_to_analyze.groupby('sentiment').agg(count=('sentiment', 'count')).reset_index()
                 
-                # We map specifically to Green/Red. 
-                # Since the Transformer ONLY outputs POSITIVE/NEGATIVE, this is safe.
+                # Dynamic Colors: Green for Positive, Red for Negative, Grey for Error
                 fig = px.bar(chart_data, x='sentiment', y='count', color='sentiment', 
-                             color_discrete_map={'POSITIVE': 'green', 'NEGATIVE': 'red'})
+                             color_discrete_map={'POSITIVE': 'green', 'NEGATIVE': 'red', 'ERROR': 'gray'})
                 st.plotly_chart(fig, use_container_width=True)
 
             st.divider()
@@ -178,6 +182,7 @@ elif page == "Reviews":
                     st.error(f"Could not generate word cloud. Error: {e}")
             else:
                 st.info("Not enough text to generate a word cloud.")
+
 
 
 
